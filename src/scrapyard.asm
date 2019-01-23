@@ -360,10 +360,10 @@ sprites:
 
 
 ; sprite graphics
-  .incbin "scrapyard_SPRITE.chr"
+  .incbin "./art/scrapyard_SPRITE.chr"
 
 ; background graphics
-  .incbin "scrapyard_BACKGROUND.chr"
+  .incbin "./art/scrapyard_BACKGROUND.chr"
 
 
 
