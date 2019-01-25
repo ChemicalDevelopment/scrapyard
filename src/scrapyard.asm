@@ -6,7 +6,6 @@
   .ineschr 1   ; 1x  8KB CHR data
   .inesmap 0   ; mapper 0 = NROM, no bank swapping
   .inesmir 1   ; background mirroring
-  
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -15,62 +14,63 @@
 ; where the sprites are stored in RAM
 SPRITE_RAM = $0200
 
-; current background/screen of meta tiles
-SCENE_METADATA = $0400
+; where the x, y coordinates are stored in PPU mem
+PLAYER_SPRITE_Y = SPRITE_RAM
+PLAYER_SPRITE_X = SPRITE_RAM+$03
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;; Global variables in zero-page memory
   .rsset $0000
+; just a debug area
+debug .rs 1
 
 ;; `input` byte, storing the current frame's: B, A, SELECT, START, UP, DOWN, LEFT, RIGHT, in that order
 input .rs 1
 raw_input .rs 1
 last_input .rs 1
 
-;; x, y coordinates in pixels. Top left is 0, 0 
-player_x .rs 1
-player_y .rs 1
-
-; what metatile do we land on?
-player_metatile_x .rs 1
-player_metatile_y .rs 1
-
-; for indexing into SCENE_METADATA
-player_metatile_idx .rs 1
-
 ;; player positional metadata:
 ;; bits: ______DD
 ;; DD = orientation, 0=N,1=E,2=S,3=W
 player_meta .rs 1
 
+;; x, y coordinates for the current sprite. Top left is 0, 0 
+csprite_x .rs 1
+csprite_y .rs 1
+
+; what metatile do we land on? (packed integer that is an index into the SCENE_METADATA array)
+csprite_metatile_idx .rs 1
+
 ;; how many frames have elapsed? (NMI loops)
 total_frames .rs 1
 
 ;; pointer variable for addressing 16 bit memory
+; these can be overwritten by functions
 ptr_lo .rs 1
 ptr_hi .rs 1
 
-ptr2_lo .rs 1
-ptr2_hi .rs 1
+;; pointer to the memory location of the current level background
+; for this to take effect, call
+ptr_level_lo .rs 1
+ptr_level_hi .rs 1
 
-; pointer to SCENE_METADATA
-ptr_SCENE_METADATA_lo .rs 1
-ptr_SCENE_METADATA_hi .rs 1
+; metatiles definition pointer
+ptr_metatiles_defs_lo .rs 1
+ptr_metatiles_defs_hi .rs 1
+
+; metatiles attribute pointer
+ptr_metatiles_attr_lo .rs 1
+ptr_metatiles_attr_hi .rs 1
+
 
 ;; temporary memory for swapping
 tmp .rs 1
 tmp2 .rs 1
 
-;; variable to count how many reads used
-reads_used .rs 1
-
-
-;; section that stores screen data
-  .rsset SCENE_METADATA
-
-scene_data .rs 240
-
+;; arguments for any function (that can be overwritten!)
+arg1 .rs 1
+arg2 .rs 1
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
@@ -85,145 +85,389 @@ vblankwait:
   RTS
 
 
-
 ;; code to set the background to the correct stage
-SetBackground:
-  ; to set a background, the first 32*30=960 bytes are the tiles, in row-major order
-  ; then, there are 256 bytes
+;; before calling this, set the ptr_level_lo and ptr_level_hi variables
+UpdateBackground:
+
+  LDA #%00000000
+  STA $2000
+  LDA #%00000000
+  STA $2001
+
+  LDA $2002             ; read PPU status to reset the high/low latch
+  LDA #$20
+  STA $2006             ; write the high byte of $2000 address
+  LDA #$00
+  STA $2006             ; write the low byte of $2000 address\
+
+  ; store in the pointer used for this function
+  LDA ptr_level_lo
+  STA ptr_lo
+  LDA ptr_level_hi
+  STA ptr_hi
 
 
-  LoadBackgroundInformation:
-    LDA $2002             ; read PPU status to reset the high/low latch
-    LDA #$20
-    STA $2006             ; write the high byte of $2000 address
-    LDA #$00
-    STA $2006             ; write the low byte of $2000 address
-    
-    LDA #LOW(SCENE_METADATA)
-    STA ptr_SCENE_METADATA_lo       ; put the low byte of the address of background into pointer
-    LDA #HIGH(SCENE_METADATA)
-    STA ptr_SCENE_METADATA_hi       ; put the high byte of the address into pointer
+  LDX #$00            ; start at pointer + 0
+  OutsideLoop:
 
-    LDA #LOW(background)
-    STA ptr_lo       ; put the low byte of the address of background into pointer
-    LDA #HIGH(background)
-    STA ptr_hi       ; put the high byte of the address into pointer
+    LDY #$00
+    InsideLoop1:
+      STX tmp
 
-    LDX #$00            ; start at pointer + 0
-    ; also use this opportunity to write meta tile info to SCENE_METADATA array
+      ; transform it into a metatile offset
+      LDA [ptr_lo], Y
+      ASL A
+      ASL A
+      TAX
 
-    OutsideLoop:
+      ; set top left corner
+      LDA metatiles_defs, x
+      STA $2007
 
-      LDY #$00
-      InsideLoop1:
-        LDA [ptr_lo], Y
-        STA tmp
-        STY tmp2
-
-        STA [ptr_SCENE_METADATA_lo], Y
-        
-
-        LDA tmp
-        LDY tmp2
-
-        STX tmp
-        ASL A
-        ASL A
-        TAX
-
-        LDA metatiles, x
-        STA $2007
-
-        INX
-        LDA metatiles, x
-        STA $2007 
-        
-        LDX tmp
-
-        INY                 ; inside loop counter
-        CPY #$10
-        BNE InsideLoop1      ; run the inside loop 256 times before continuing down
-
-      LDY #$00
-      InsideLoop2:
-        ; use local ram that it's been copied in to
-        LDA [ptr_lo], Y
-        STX tmp
-        ASL A
-        ASL A
-        TAX
-        INX
-        INX
-        LDA metatiles, x
-        STA $2007
-
-        INX
-        LDA metatiles, x
-        STA $2007 
-        
-        LDX tmp
-
-        INY                 ; inside loop counter
-        CPY #$10
-        BNE InsideLoop2      ; run the inside loop 256 times before continuing down
-
-      LDA ptr_lo
-      CLC
-      ADC #$10
-      STA ptr_lo
-      STA ptr_SCENE_METADATA_lo
-
+      ; set top right corner
       INX
-      CPX #$0F
-      BNE OutsideLoop
+      LDA metatiles_defs, x
+      STA $2007 
+      
+      LDX tmp ; restore to outside counter
 
-    LDA #LOW(background_attributes)
-    STA ptr_lo       ; put the low byte of the address of background into pointer
-    LDA #HIGH(background_attributes)
-    STA ptr_hi       ; put the high byte of the address into pointer
+      INY
+      CPY #$10 ; 16 = width of the metatile array 
+      BNE InsideLoop1
 
-    ; copy all 256 attribute bytes here    
+    ; do it over again for the bottom left and bottom right of the next row of sprites
+    ; (the lower half of the metatile row, though)
+    LDY #$00
+    InsideLoop2:
+      STX tmp
+
+      LDA [ptr_lo], Y
+      ASL A
+      ASL A
+      TAX
+
+      ;; set bottom left corner
+      INX
+      INX
+      LDA metatiles_defs, x
+      STA $2007
+
+      ;; set bottom right corner
+      INX
+      LDA metatiles_defs, x
+      STA $2007 
+      
+      LDX tmp ; restore to outside counter
+
+      INY
+      CPY #$10
+      BNE InsideLoop2
+
+    LDA #$EF
+    CMP ptr_lo
+    BCS UpdateLoPtr
+
+    INC ptr_hi ; catch overflow and change high register address
+
+    UpdateLoPtr:
+    LDA ptr_lo
+    CLC
+    ADC #$10 ; change lower pointer to increment read address
+    STA ptr_lo
+
+    INX
+    CPX #$0F
+    BNE OutsideLoop
+;;
+    ; copy all 64 attribute bytes (which we assume are 0 rightnow)   
     LDY #$00
     LoadAttributesLoop:
-      LDA [ptr_lo], Y
-      STA $2007           ; this runs 256 * 4 times
+      LDA #$00
+      STA $2007
 
-      INY                 ; inside loop counter
-      CPY #$40
-      BNE LoadAttributesLoop      ; run the inside loop 256 times before continuing down
+      INY
+      CPY #$40 ; 64 bytes
+      BNE LoadAttributesLoop
 
-    LDA #LOW(background)
-    STA ptr_lo       ; put the low byte of the address of background into pointer
-    LDA #HIGH(background)
-    STA ptr_hi 
+  LDA #%10010000
+  STA $2000
 
-    LDA #LOW(metatiledefs_meta)
-    STA ptr2_lo       ; put the low byte of the address of background into pointer
-    LDA #HIGH(metatiledefs_meta)
-    STA ptr2_hi       ; put the high byte of the address into pointer
-
-    
-    LDA #LOW(SCENE_METADATA)
-    STA ptr_SCENE_METADATA_lo       ; put the low byte of the address of background into pointer
-    LDA #HIGH(SCENE_METADATA)
-    STA ptr_SCENE_METADATA_hi       ; put the high byte of the address into pointer
-
-    ; copy all 240 metadaatas   
-    LDY #$00
-    LoadMetadataLoop:
-      STY tmp
-      LDA [ptr_lo], Y
-      TAY
-      LDA [ptr2_lo], Y
-      LDY tmp
-      STA [ptr_SCENE_METADATA_lo], Y
-
-      INY                 ; inside loop counter
-      CPY #$F0
-      BNE LoadMetadataLoop      ; run the inside loop 256 times before continuing down
-      
+  LDA #%00011110
+  STA $2001
 
   RTS
+
+;; this just calculates the csprite_metatile_idx
+SetMetatileIdx:
+  ; we update the metatile x and y
+  LDA csprite_y
+  CLC
+  ADC #$02
+  ; take just the high bits
+  AND #$F0
+  STA csprite_metatile_idx
+
+  LDA csprite_x
+  ;AND #$0F
+  LSR A
+  LSR A
+  LSR A
+  LSR A
+  EOR csprite_metatile_idx
+  STA csprite_metatile_idx
+  
+  EndSetMetatileIdx:
+  RTS
+
+;; basically to save code space there is a check move function here
+;; takes 'arg1' register as argument to add to metatile idx 
+;; and writes to the accumulator so you can use BNE
+CheckMoveOffsetADD:
+  LDA csprite_metatile_idx
+  CLC
+  ADC arg1
+  TAY
+  LDA [ptr_level_lo], y
+  TAY
+  LDA metatiles_attr, y
+  RTS
+
+CheckMoveOffsetSUB:
+  LDA csprite_metatile_idx
+  SEC
+  SBC arg1
+  TAY
+  LDA [ptr_level_lo], y
+  TAY
+  LDA metatiles_attr, y
+  RTS
+
+;; this uses `csprite_y` as input and writes over it!
+MoveN:
+  ; first check
+  LDA #$00
+  STA arg1
+  JSR CheckMoveOffsetSUB
+  BNE EndMoveN
+
+  ; if it is zero aligned you need this trick
+  LDA csprite_x
+  AND #$0F
+  BEQ RealMoveN
+
+  ; first check
+  LDA #$01
+  STA arg1
+  JSR CheckMoveOffsetADD
+  BNE EndMoveN
+
+  RealMoveN:
+  LDA csprite_y
+  SEC
+  SBC #%01
+  STA csprite_y
+
+  EndMoveN:
+  RTS
+
+;; this uses `csprite_x` as input and writes over it!
+MoveE:
+  ; first check
+  LDA #$11
+  STA arg1
+  JSR CheckMoveOffsetADD
+  BNE EndMoveE
+
+  ; if it is zero aligned you need this trick
+  LDA csprite_y
+  AND #$0F
+  CMP #$0D
+  BEQ RealMoveE
+
+  ; first check
+  LDA #$01
+  STA arg1
+  JSR CheckMoveOffsetADD
+  BNE EndMoveE
+
+  RealMoveE:
+  INC csprite_x
+
+  EndMoveE:
+  RTS
+
+;; this uses `csprite_y` as input and writes over it!
+MoveS:
+
+  LDA csprite_y
+  AND #$0F
+  CMP #$0D
+  BEQ MoveS_YD
+
+  LDA csprite_x
+  AND #$0F
+  BEQ MoveS_X0
+
+
+
+  LDA #$10
+  STA arg1
+  JSR CheckMoveOffsetADD
+  BNE EndMoveS
+
+  LDA #$11
+  STA arg1
+  JSR CheckMoveOffsetADD
+  BNE EndMoveS
+  JMP RealMoveS
+
+  MoveS_X0:
+    LDA csprite_metatile_idx
+    CLC
+    ADC #$10
+    TAY
+    LDA [ptr_level_lo], y
+    TAY
+    LDA metatiles_attr, y
+    BNE EndMoveS
+
+    LDA #$10
+    STA arg1
+    JSR CheckMoveOffsetADD
+    BNE EndMoveS
+    JMP RealMoveS
+
+  MoveS_YD:
+    LDA csprite_x
+    AND #$0F
+    BEQ MoveS_X0_YD
+
+    LDA csprite_metatile_idx
+    CLC
+    ADC #$21
+    TAY
+    LDA [ptr_level_lo], y
+    TAY
+    LDA metatiles_attr, y
+    BNE EndMoveS
+
+    LDA #$20
+    STA arg1
+    JSR CheckMoveOffsetADD
+    BNE EndMoveS
+    JMP RealMoveS
+
+  MoveS_X0_YD:
+    LDA csprite_metatile_idx
+    CLC
+    ADC #$20
+    TAY
+    LDA [ptr_level_lo], y
+    TAY
+    LDA metatiles_attr, y
+    BNE EndMoveS
+
+  RealMoveS:
+  INC csprite_y
+
+  EndMoveS:
+  RTS
+
+;; this uses `csprite_y` as input and writes over it!
+MoveW:
+
+  LDA csprite_y
+  AND #$0F
+  CMP #$0D
+  BEQ MoveW_SpecialPxY ; 0 pixel special case
+
+  LDA csprite_x
+  AND #$0F
+  BEQ MoveW_SpecialPxX ; side pixel special case
+
+  LDA #$10
+  STA arg1
+  JSR CheckMoveOffsetADD
+  BNE EndMoveW
+
+  LDA #$00
+  STA arg1
+  JSR CheckMoveOffsetADD
+  BNE EndMoveW
+
+  JMP RealMoveW
+
+  MoveW_SpecialPxY:
+    LDA csprite_x
+    AND #$0F
+    BEQ MoveW_SpecialPxXSpecialPxY ; side pixel special case
+
+    LDA #$11
+    STA arg1
+    JSR CheckMoveOffsetADD
+    BNE EndMoveW
+
+    ; custom check
+    ;LDA csprite_metatile_idx
+    ;SEC
+    ;ADC #$10
+    ;TAY
+    ;LDA [ptr_level_lo], y
+    ;BNE EndMoveW
+
+    JMP RealMoveW
+
+  MoveW_SpecialPxX:
+    LDA csprite_metatile_idx
+    CLC
+    ADC #$10
+    SEC
+    SBC #$01
+    TAY
+    LDA [ptr_level_lo], y
+    TAY
+    LDA metatiles_attr, y
+    BNE EndMoveW
+
+    LDA #$01
+    STA arg1
+    JSR CheckMoveOffsetSUB
+    BNE EndMoveW
+
+    JMP RealMoveW
+
+  MoveW_SpecialPxXSpecialPxY:
+    LDA csprite_metatile_idx
+    CLC
+    ADC #$10
+    SEC
+    SBC #$01
+    TAY
+    LDA [ptr_level_lo], y
+    TAY
+    LDA metatiles_attr, y
+    BNE EndMoveW
+
+    LDA csprite_metatile_idx
+    CLC
+    ADC #$10
+    TAY
+    LDA [ptr_level_lo], y
+    TAY
+    LDA metatiles_attr, y
+    BNE EndMoveW
+
+    JMP RealMoveW
+
+  RealMoveW:
+    LDA csprite_x
+    SEC
+    SBC #%01
+    STA csprite_x
+
+  EndMoveW:
+    RTS
+
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
@@ -285,9 +529,27 @@ LoadPalettes:
              ; each with 4 colors (1 byte per color), so 2 * 4 * 4 = 32 = $20 total bytes to copy
     BNE LoadPalettesLoop
 
+InitializePointers:
+  ; initialize pointers
+  LDA #LOW(metatiles_defs)
+  STA ptr_metatiles_defs_lo
+  LDA #HIGH(metatiles_defs)
+  STA ptr_metatiles_defs_hi
 
-  ; set up the background tiles
-  JSR SetBackground
+  LDA #LOW(metatiles_attr)
+  STA ptr_metatiles_attr_lo
+  LDA #HIGH(metatiles_attr)
+  STA ptr_metatiles_attr_hi
+
+; set the level to A1
+  LDA #LOW(level_A1)
+  STA ptr_level_lo
+  LDA #HIGH(level_A1)
+  STA ptr_level_hi
+
+  JSR UpdateBackground
+
+
 
 
 ;; Initialize everything about the game state
@@ -302,23 +564,35 @@ InitializeState:
 
   ; now initialize player coordinates, defaulting to the middle of the screen
   LDA #$72
-  STA player_y
+  STA PLAYER_SPRITE_Y
 
   LDA #$80
-  STA player_x
+  STA PLAYER_SPRITE_X
+
+  LDA #$00
+  STA PLAYER_SPRITE_X + 5
+  LDA #$01
+  STA PLAYER_SPRITE_X + 9
+  LDA #$02
+  STA PLAYER_SPRITE_X + 13
+  LDA #$03
+  STA PLAYER_SPRITE_X + 17
 
   ; all the rest of these set to 0
   LDA #$00
 
   STA player_meta
 
-  STA player_metatile_x
-  STA player_metatile_y
+  STA csprite_metatile_idx
 
   STA input
   STA raw_input
   STA last_input
   STA total_frames
+
+
+;; now actually set up things
+
 
 
 ;; now wait for NMI to kick in
@@ -331,6 +605,7 @@ Forever:
 
 ;;;; NMI - this is the main loop that is called every frame. Input/graphics handled here
 NMI:
+
 ;; copy sprites
   LDA #LOW(SPRITE_RAM)
   STA $2003       ; set the low byte (00) of the RAM address
@@ -516,7 +791,6 @@ ReadInput:
     STA SPRITE_RAM, Y
 
 
-
   TSOrientDone:
   ; done setting orientation
 
@@ -531,25 +805,13 @@ ReadInput:
   BEQ RenderPlayer
   ; else, we need to update positions
 
-
   ; we update the metatile x and y
-  LDA player_y
-  ; divide by 16
-  LSR A
-  LSR A
-  LSR A
-  LSR A
-  STA player_metatile_y
-  INC player_metatile_y
+  LDA PLAYER_SPRITE_Y
+  STA csprite_y
+  LDA PLAYER_SPRITE_X
+  STA csprite_x
 
-  LDA player_x
-  ; divide by 16
-  LSR A
-  LSR A
-  LSR A
-  LSR A
-  STA player_metatile_x
-  INC player_metatile_x
+  JSR SetMetatileIdx
 
   UpdatePositionN:
     LDA player_meta
@@ -557,57 +819,40 @@ ReadInput:
     CMP #%00
     BNE UpdatePositionE
     ; we are facing north
-    LDA player_y
-    SEC
-    SBC #%01
-    STA player_y
-    JMP RenderPlayer
+    JSR MoveN
+    JMP EndUpdatePosition
   UpdatePositionE:
     LDA player_meta
     AND #%11
     CMP #%01
     BNE UpdatePositionS
     ; we are facing east
-
-    LDA player_metatile_y
-    ASl A
-    ASl A
-    ASl A
-    ASl A
-    ORA player_metatile_x
-
-    STA player_metatile_idx
-    TAY
-    LDA [ptr_SCENE_METADATA_lo], Y
-    
-    BNE EndTryMovePlayerE
-
-    INC player_x
-    EndTryMovePlayerE:
-    JMP RenderPlayer
+    JSR MoveE
+    JMP EndUpdatePosition
   UpdatePositionS:
     LDA player_meta
     AND #%11
     CMP #%10
     BNE UpdatePositionW
     ; we are facing east
-    INC player_y
-    JMP RenderPlayer
+    JSR MoveS
+    JMP EndUpdatePosition
   UpdatePositionW:
     LDA player_meta
     AND #%11
     CMP #%11
-    BNE RenderPlayer
+    BNE EndUpdatePosition
     ; we are facing east
-    LDA player_x
-    SEC
-    SBC #%01
-    STA player_x
-
+    JSR MoveW
+  EndUpdatePosition:
+  LDA csprite_x
+  STA PLAYER_SPRITE_X
+  LDA csprite_y
+  STA PLAYER_SPRITE_Y
 
 ;; update the actual x and y of the sprites
 RenderPlayer:
-  LDA player_y
+  LDA PLAYER_SPRITE_Y
   LDY #$00
   STA SPRITE_RAM, Y
   LDY #$04
@@ -621,7 +866,7 @@ RenderPlayer:
   LDY #$0C
   STA SPRITE_RAM, Y
 
-  LDA player_x
+  LDA PLAYER_SPRITE_X
   LDY #$03
   STA SPRITE_RAM, Y
   LDY #$0B
@@ -635,16 +880,25 @@ RenderPlayer:
   LDY #$0F
   STA SPRITE_RAM, Y
 
-
+  JSR vblankwait
 
 ;; Finalize counters, etc
 FinalizeFrame:
 
-
-
   INC total_frames
+  
+  ;LDA total_frames
+  ;BNE DoneFrame
 
+  ; set the level to A2
+  ;LDA #LOW(level_A2)
+  ;STA ptr_level_lo
+  ;LDA #HIGH(level_A2)
+  ;STA ptr_level_hi
 
+  ;JSR UpdateBackground
+
+DoneFrame:
 ;; return from the interrupt, until next time NMI is called
   RTI
 
@@ -655,7 +909,7 @@ FinalizeFrame:
   .org $E000
 
 ;; main level, with included attributes
-background:
+level_A1:
 
 ;; stored in metatiles, visually like below:
 ;; total of 15 (NOT! 16) rows, and 16 columns
@@ -677,7 +931,31 @@ background:
   .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
 
-background_attributes:
+;; main level, with included attributes
+level_A2:
+
+;; stored in metatiles, visually like below:
+;; total of 15 (NOT! 16) rows, and 16 columns
+;; each is an index into the `metatiles` address to tell which metatile is located on the grid
+;; so this section is 15 * 16 = 240 bytes
+  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $03, $00, $00, $11, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $03, $11, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $03, $11, $00, $11, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $03, $11, $00, $11, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $03, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $00, $11, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+
+
+generic_attributes:
 
 ;;; attributes are 64 bytes that tell how the metatiles behave (color palette)
   .db %00000000, %00000000, %00000000, %00000000, %00000000, %00000000, %00000000, %00000000
@@ -710,14 +988,8 @@ palette:
 
 
 
-;; metatile definitions
-metatiledefs_TL:
-metatiledefs_TR:
-metatiledefs_BL:
-metatiledefs_BR:
-
 ;; metadata about that sort of tile (does it block player movement, activate something, etc)
-metatiledefs_meta:
+metatiles_attr:
 ; metadata byte:
 ; %ABCDEFGH 
 ; H: is considered a blocking obstacle if 1
@@ -733,8 +1005,8 @@ metatiledefs_meta:
 
   .db %00000000, %00000000, %00000000, %00000000
 
-;; storage for what metatiles there are
-metatiles:
+;; storage for the definitions of metatiles
+metatiles_defs:
 ; each metatile is 4 bytes. They are sequentially arranged, TOPLEFT, TOPRIGHT, BOTTOMLEFT, BOTTOMRIGHt in which background tile
 
   ; $00 starts here
@@ -791,7 +1063,6 @@ metatiles:
 ;; bank for graphics information  
   .bank 2
   .org $0000
-
 
 ; sprite graphics
   .incbin "./art/scrapyard_SPRITE.chr"
