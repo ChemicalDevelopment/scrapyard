@@ -22,6 +22,15 @@ PLAYER_SPRITE_X = SPRITE_RAM+$03
 
 ;;;; Global variables in zero-page memory
   .rsset $0000
+
+;; binary coded decimal converters, for storing the place values for converted things
+; to get the hundreds place, use bcd_100s
+; to get tens place use bcd_10s1s & 0xF0
+; to get ones place use bcd_10s1s & 0x0F
+bcd_bin .rs 1
+bcd_100s .rs 1
+bcd_10s1s .rs 1
+
 ; just a debug area
 debug .rs 1
 
@@ -30,10 +39,22 @@ input .rs 1
 raw_input .rs 1
 last_input .rs 1
 
+;; player health from a scale of 0-100
+player_health .rs 1
+
+; how many frames the player is stunned for (always counting down)
+player_stun .rs 1
+
 ;; player positional metadata:
 ;; bits: ______DD
 ;; DD = orientation, 0=N,1=E,2=S,3=W
 player_meta .rs 1
+
+;; frame flag that tells if something happened (i.e. hitting a wall, hitting edge of world, etc)
+game_flag .rs 1
+;; bits: ABCDEFGH
+;; H tells whether or not the player has hit an edge of the screen
+;; G tells whether tells whether the player has hit an obstacle
 
 ;; x, y coordinates for the current sprite. Top left is 0, 0 
 csprite_x .rs 1
@@ -72,6 +93,10 @@ tmp2 .rs 1
 arg1 .rs 1
 arg2 .rs 1
 
+; random state machine for generating bytes
+rand_state .rs 1
+
+
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 ;;;; Subroutines, functions, and most code is stored here
@@ -85,19 +110,38 @@ vblankwait:
   RTS
 
 
+SetHUD:
+
+
+  LDA $2002             ; read PPU status to reset the high/low latch
+  LDA #$20
+  STA $2006             ; write the high byte of $2000 address
+  LDA #$00
+  STA $2006             ; write the low byte of $2000 address\
+
+  LDY #$00
+  HeaderLoop:
+    LDA default_hud, Y
+    STA $2007
+    INY
+    CPY #$C0
+    BNE HeaderLoop
+
+  RTS
+
 ;; code to set the background to the correct stage
 ;; before calling this, set the ptr_level_lo and ptr_level_hi variables
 UpdateBackground:
 
-  LDA #%00000000
-  STA $2000
+  ;LDA #%00000000
+  ;STA $2000
   LDA #%00000000
   STA $2001
 
   LDA $2002             ; read PPU status to reset the high/low latch
   LDA #$20
   STA $2006             ; write the high byte of $2000 address
-  LDA #$00
+  LDA #$C0
   STA $2006             ; write the low byte of $2000 address\
 
   ; store in the pointer used for this function
@@ -106,8 +150,7 @@ UpdateBackground:
   LDA ptr_level_hi
   STA ptr_hi
 
-
-  LDX #$00            ; start at pointer + 0
+  LDX #$00 ; start at pointer + 0
   OutsideLoop:
 
     LDY #$00
@@ -176,33 +219,175 @@ UpdateBackground:
     STA ptr_lo
 
     INX
-    CPX #$0F
+    CPX #$0C ; C=12 rows
     BNE OutsideLoop
 ;;
     ; copy all 64 attribute bytes (which we assume are 0 rightnow)   
     LDY #$00
     LoadAttributesLoop:
-      LDA #$00
+      LDA generic_attributes, Y
       STA $2007
 
       INY
       CPY #$40 ; 64 bytes
       BNE LoadAttributesLoop
 
-  LDA #%10010000
-  STA $2000
+  ;LDA #%10010000
+  ;STA $2000
 
   LDA #%00011110
   STA $2001
 
+  ; reset scroll
+  ;LDA #$00
+  ;STA $2005
+  ;STA $2005
+
+
   RTS
+
+
+;; random number generation
+; uses rand_state
+RandomNumber:
+  LDA rand_state
+  STA tmp
+
+  ROL tmp
+  ROL tmp
+  ROL tmp
+
+  ROR A
+  
+  CLC
+  ADC tmp
+
+  STA rand_state
+  INC rand_state
+
+  RTS
+
+;; binary coded decimal converter for the A register
+; so call LDA first with your argument
+; then get your rests in bcd_100s and bcd_10s1s
+; based on shift and add 3 algo: https://pubweb.eng.utah.edu/~nmcdonal/Tutorials/BCDTutorial/BCDConversion.html
+CalcBCD:
+  STA bcd_bin
+
+  LDA #$00
+  STA bcd_100s
+  STA bcd_10s1s
+
+  LDX #$00
+
+  BCDLoop:
+
+    LDA bcd_100s
+    CMP #$05
+    BCC BCDHundredsGood
+    LDA bcd_100s
+    CLC
+    ADC #$03
+    STA bcd_100s
+
+    BCDHundredsGood:
+
+    LDA bcd_10s1s
+    AND #$F0
+    CMP #$50
+    BCC BCDTensGood
+    LDA bcd_10s1s
+    CLC
+    ADC #$30
+    STA bcd_10s1s
+
+    BCDTensGood:
+
+    LDA bcd_10s1s
+    AND #$0F
+    CMP #$05
+    BCC BCDOnesGood
+    LDA bcd_10s1s
+    CLC
+    ADC #$03
+    STA bcd_10s1s
+
+    BCDOnesGood:
+
+    CLC
+    ROL bcd_bin
+    ROL bcd_10s1s
+    ROL bcd_100s
+
+    INX
+    CPX #$08
+    BNE BCDLoop
+
+  ; reset scroll
+  LDA #$00
+  STA $2005
+  STA $2005
+
+  RTS
+
+; for writing the BCD to the screen in the GUI section
+WriteBCDToScreen:
+
+  LDA $2002             ; read PPU status to reset the high/low latch
+  LDA #$20
+  STA $2006             ; write the high byte of $2000 address
+  LDA #$63
+  STA $2006             ; write the low byte of $2000 address\
+
+  LDA bcd_100s
+  CLC
+  ADC #$80
+  STA $2007
+  
+  LDA $2002             ; read PPU status to reset the high/low latch
+  LDA #$20
+  STA $2006             ; write the high byte of $2000 address
+  LDA #$64
+  STA $2006             ; write the low byte of $2000 address\
+
+  LDA bcd_10s1s
+  LSR A
+  LSR A
+  LSR A
+  LSR A
+  CLC
+  ADC #$80
+
+  STA $2007
+
+  LDA $2002             ; read PPU status to reset the high/low latch
+  LDA #$20
+  STA $2006             ; write the high byte of $2000 address
+  LDA #$65
+  STA $2006             ; write the low byte of $2000 address\
+
+  LDA bcd_10s1s
+  AND #$0F
+  CLC
+  ADC #$80
+  STA $2007
+
+  ; reset scroll
+  LDA #$00
+  STA $2005
+  STA $2005
+
+  RTS
+
 
 ;; this just calculates the csprite_metatile_idx
 SetMetatileIdx:
   ; we update the metatile x and y
   LDA csprite_y
-  CLC
-  ADC #$02
+  ;CLC
+  ;ADC #$01
+  SEC 
+  SBC #$30
   ; take just the high bits
   AND #$F0
   STA csprite_metatile_idx
@@ -217,6 +402,93 @@ SetMetatileIdx:
   STA csprite_metatile_idx
   
   EndSetMetatileIdx:
+  RTS
+
+
+SetOrientN:
+  LDA #$20
+  LDY #$01
+  STA SPRITE_RAM, Y
+  LDA #$21
+  LDY #$05
+  STA SPRITE_RAM, Y
+  LDA #$22
+  LDY #$09
+  STA SPRITE_RAM, Y
+  LDA #$23
+  LDY #$0D
+  STA SPRITE_RAM, Y
+
+  ; set the tile meta
+  LDA #%00000000
+  LDY #$02
+  STA SPRITE_RAM, Y
+  LDY #$06
+  STA SPRITE_RAM, Y
+  LDY #$0A
+  STA SPRITE_RAM, Y
+  LDY #$0E
+  STA SPRITE_RAM, Y
+  RTS
+
+
+SetOrientE:
+  LDA #$40
+  LDY #$01
+  STA SPRITE_RAM, Y
+  LDA #$41
+  LDY #$05
+  STA SPRITE_RAM, Y
+  LDA #$42
+  LDY #$09
+  STA SPRITE_RAM, Y
+  LDA #$43
+  LDY #$0D
+  STA SPRITE_RAM, Y
+
+  ; set the tile meta
+  LDA #%00000000
+  LDY #$02
+  STA SPRITE_RAM, Y
+  LDY #$06
+  STA SPRITE_RAM, Y
+  LDY #$0A
+  STA SPRITE_RAM, Y
+  LDY #$0E
+  STA SPRITE_RAM, Y
+  RTS
+
+SetOrientS:
+  LDA #$23
+  LDY #$01
+  STA SPRITE_RAM, Y
+  LDA #$22
+  LDY #$05
+  STA SPRITE_RAM, Y
+  LDA #$21
+  LDY #$09
+  STA SPRITE_RAM, Y
+  LDA #$20
+  LDY #$0D
+  STA SPRITE_RAM, Y
+
+  RTS
+
+
+SetOrientW:
+  LDA #$43
+  LDY #$01
+  STA SPRITE_RAM, Y
+  LDA #$42
+  LDY #$05
+  STA SPRITE_RAM, Y
+  LDA #$41
+  LDY #$09
+  STA SPRITE_RAM, Y
+  LDA #$40
+  LDY #$0D
+  STA SPRITE_RAM, Y
+
   RTS
 
 ;; basically to save code space there is a check move function here
@@ -244,6 +516,18 @@ CheckMoveOffsetSUB:
 
 ;; this uses `csprite_y` as input and writes over it!
 MoveN:
+  ; trigger going up off the screen
+  LDA csprite_y
+  CMP #$30
+  BCS MoveNFirstCheck
+
+  LDA game_flag
+  ORA #%00000001
+  STA game_flag
+
+  RTS
+
+  MoveNFirstCheck:
   ; first check
   LDA #$00
   STA arg1
@@ -266,12 +550,32 @@ MoveN:
   SEC
   SBC #%01
   STA csprite_y
+  RTS
 
+  
   EndMoveN:
+
+  LDA game_flag
+  ORA #%00000010
+  STA game_flag
+
   RTS
 
 ;; this uses `csprite_x` as input and writes over it!
 MoveE:
+
+  ; trigger going right off the screen
+  LDA csprite_x
+  CMP #$E5
+  BCC MoveEFirstCheck
+
+  LDA game_flag
+  ORA #%00000001
+  STA game_flag
+
+  RTS
+
+  MoveEFirstCheck:
   ; first check
   LDA #$11
   STA arg1
@@ -281,7 +585,7 @@ MoveE:
   ; if it is zero aligned you need this trick
   LDA csprite_y
   AND #$0F
-  CMP #$0D
+  CMP #$0F
   BEQ RealMoveE
 
   ; first check
@@ -292,22 +596,38 @@ MoveE:
 
   RealMoveE:
   INC csprite_x
+  RTS
 
   EndMoveE:
+
+  LDA game_flag
+  ORA #%00000010
+  STA game_flag
+
   RTS
 
 ;; this uses `csprite_y` as input and writes over it!
 MoveS:
+  ; trigger going down off the screen
+  LDA csprite_y
+  CMP #$CF
+  BCC MoveSFirstCheck
 
+  LDA game_flag
+  ORA #%00000001
+  STA game_flag
+
+  RTS
+
+  MoveSFirstCheck:
   LDA csprite_y
   AND #$0F
-  CMP #$0D
+  CMP #$0F
   BEQ MoveS_YD
 
   LDA csprite_x
   AND #$0F
   BEQ MoveS_X0
-
 
 
   LDA #$10
@@ -369,16 +689,32 @@ MoveS:
 
   RealMoveS:
   INC csprite_y
+  RTS
 
   EndMoveS:
+  LDA game_flag
+  ORA #%00000010
+  STA game_flag
   RTS
 
 ;; this uses `csprite_y` as input and writes over it!
 MoveW:
+  ; trigger going left off the screen
+  LDA csprite_x
+  CMP #$0C
+  BCS MoveWFirstCheck
+
+  LDA game_flag
+  ORA #%00000001
+  STA game_flag
+
+  RTS
+
+  MoveWFirstCheck:
 
   LDA csprite_y
   AND #$0F
-  CMP #$0D
+  CMP #$0F
   BEQ MoveW_SpecialPxY ; 0 pixel special case
 
   LDA csprite_x
@@ -464,8 +800,12 @@ MoveW:
     SEC
     SBC #%01
     STA csprite_x
+    RTS
 
   EndMoveW:
+    LDA game_flag
+    ORA #%00000010
+    STA game_flag
     RTS
 
 
@@ -547,6 +887,8 @@ InitializePointers:
   LDA #HIGH(level_A1)
   STA ptr_level_hi
 
+  JSR SetHUD
+
   JSR UpdateBackground
 
 
@@ -569,19 +911,18 @@ InitializeState:
   LDA #$80
   STA PLAYER_SPRITE_X
 
-  LDA #$00
-  STA PLAYER_SPRITE_X + 5
-  LDA #$01
-  STA PLAYER_SPRITE_X + 9
-  LDA #$02
-  STA PLAYER_SPRITE_X + 13
-  LDA #$03
-  STA PLAYER_SPRITE_X + 17
+  JSR SetOrientN
+
+
+  LDA #100
+  STA player_health
+
 
   ; all the rest of these set to 0
   LDA #$00
 
   STA player_meta
+  STA player_stun
 
   STA csprite_metatile_idx
 
@@ -591,8 +932,13 @@ InitializeState:
   STA total_frames
 
 
-;; now actually set up things
+  LDA #00
+  JSR CalcBCD
+  JSR WriteBCDToScreen
 
+
+
+;; now actually set up things
 
 
 ;; now wait for NMI to kick in
@@ -601,7 +947,6 @@ Forever:
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-
 
 ;;;; NMI - this is the main loop that is called every frame. Input/graphics handled here
 NMI:
@@ -612,6 +957,9 @@ NMI:
   LDA #HIGH(SPRITE_RAM)
   STA $4014       ; set the high byte (02) of the RAM address, start the transfer
 
+
+  LDA #$00
+  STA game_flag
 
 ;; Here is where the controllers are read, and the input is stored in 'input'
 ReadInput:
@@ -673,29 +1021,7 @@ ReadInput:
     LDA #$00
     STA player_meta
     ; set specific tiles
-    LDA #$00
-    LDY #$01
-    STA SPRITE_RAM, Y
-    LDA #$01
-    LDY #$05
-    STA SPRITE_RAM, Y
-    LDA #$02
-    LDY #$09
-    STA SPRITE_RAM, Y
-    LDA #$03
-    LDY #$0D
-    STA SPRITE_RAM, Y
-
-    ; set the tile meta
-    LDA #%00000000
-    LDY #$02
-    STA SPRITE_RAM, Y
-    LDY #$06
-    STA SPRITE_RAM, Y
-    LDY #$0A
-    STA SPRITE_RAM, Y
-    LDY #$0E
-    STA SPRITE_RAM, Y
+    JSR SetOrientN
   TSOrientE:
     LDA input
     AND #%0001
@@ -703,29 +1029,7 @@ ReadInput:
     LDA #$01
     STA player_meta
     ; set specific tiles
-    LDA #$20
-    LDY #$01
-    STA SPRITE_RAM, Y
-    LDA #$21
-    LDY #$05
-    STA SPRITE_RAM, Y
-    LDA #$22
-    LDY #$09
-    STA SPRITE_RAM, Y
-    LDA #$23
-    LDY #$0D
-    STA SPRITE_RAM, Y
-
-    ; set the tile meta
-    LDA #%00000000
-    LDY #$02
-    STA SPRITE_RAM, Y
-    LDY #$06
-    STA SPRITE_RAM, Y
-    LDY #$0A
-    STA SPRITE_RAM, Y
-    LDY #$0E
-    STA SPRITE_RAM, Y
+    JSR SetOrientE
 
   TSOrientS:
     LDA input
@@ -735,19 +1039,7 @@ ReadInput:
     STA player_meta
 
     ; set specific tiles
-    LDA #$03
-    LDY #$01
-    STA SPRITE_RAM, Y
-    LDA #$02
-    LDY #$05
-    STA SPRITE_RAM, Y
-    LDA #$01
-    LDY #$09
-    STA SPRITE_RAM, Y
-    LDA #$00
-    LDY #$0D
-    STA SPRITE_RAM, Y
-
+    JSR SetOrientS
     ; set the tile meta
     LDA #%11000000
     LDY #$02
@@ -766,18 +1058,7 @@ ReadInput:
     LDA #$03
     STA player_meta
     ; set specific tiles
-    LDA #$23
-    LDY #$01
-    STA SPRITE_RAM, Y
-    LDA #$22
-    LDY #$05
-    STA SPRITE_RAM, Y
-    LDA #$21
-    LDY #$09
-    STA SPRITE_RAM, Y
-    LDA #$20
-    LDY #$0D
-    STA SPRITE_RAM, Y
+    JSR SetOrientW
 
     ; set the tile meta
     LDA #%11000000
@@ -812,7 +1093,10 @@ ReadInput:
   STA csprite_x
 
   JSR SetMetatileIdx
+  LDA player_stun
+  BNE EndUpdatePosition
 
+  ; only move if not stunned
   UpdatePositionN:
     LDA player_meta
     AND #%11
@@ -849,6 +1133,7 @@ ReadInput:
   STA PLAYER_SPRITE_X
   LDA csprite_y
   STA PLAYER_SPRITE_Y
+  
 
 ;; update the actual x and y of the sprites
 RenderPlayer:
@@ -880,13 +1165,106 @@ RenderPlayer:
   LDY #$0F
   STA SPRITE_RAM, Y
 
+
+  LDA game_flag
+  AND #%00000010
+  BEQ CheckSetSection
+
+  ; player has hit obstacle
+
+  LDA player_health
+  SEC
+  SBC #$01
+  STA player_health
+
+  LDA PLAYER_SPRITE_X
+  SEC
+  SBC #$10
+  STA PLAYER_SPRITE_X
+  
+  LDA player_stun
+  CLC
+  ADC #$10
+  STA player_stun
+
+
+CheckSetSection:
+  LDA game_flag
+  AND #%00000001
+  BEQ FinalizeFrame
+
+  ;; player wants to change areas
   JSR vblankwait
+
+SetSectionN:
+  LDA player_meta
+  AND #%11
+  CMP #%00
+  BNE SetSectionE
+
+  ; set the level to A2
+  LDA #LOW(level_A2)
+  STA ptr_level_lo
+  LDA #HIGH(level_A2)
+  STA ptr_level_hi
+
+  LDA #$CE
+  STA PLAYER_SPRITE_Y
+
+SetSectionE:
+  LDA player_meta
+  AND #%11
+  CMP #%01
+  BNE SetSectionS
+
+SetSectionS:
+  LDA player_meta
+  AND #%11
+  CMP #%10
+  BNE SetSectionW
+  
+  ; set the level to A1
+  LDA #LOW(level_A1)
+  STA ptr_level_lo
+  LDA #HIGH(level_A1)
+  STA ptr_level_hi
+
+  LDA #$20
+  STA PLAYER_SPRITE_Y
+
+SetSectionW:
+  LDA player_meta
+  AND #%11
+  CMP #%11
+  BNE SetSectionEnd
+
+SetSectionEnd:
+
+  JSR UpdateBackground
+
 
 ;; Finalize counters, etc
 FinalizeFrame:
 
+  JSR RandomNumber
+
   INC total_frames
   
+  LDA player_stun
+  BEQ AfterUpdatePlayerStun
+  LDA player_stun
+  SEC
+  SBC #$01
+  STA player_stun
+
+  AfterUpdatePlayerStun:
+  
+  ;LDA total_frames
+  LDA player_health
+  JSR CalcBCD
+  JSR WriteBCDToScreen
+
+
   ;LDA total_frames
   ;BNE DoneFrame
 
@@ -908,13 +1286,20 @@ DoneFrame:
   .bank 1
   .org $E000
 
+default_hud:
+  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .db $00, $AA, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $AB, $00
+  .db $00, $A6, $9C, $8C, $9B, $8A, $99, $A2, $8A, $9B, $8D, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $9C, $8E, $8C, $A4, $8A, $80, $A8, $00
+  .db $00, $A6, $B0, $A4, $A4, $A4, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $A8, $00
+  .db $00, $A6, $B1, $A4, $A4, $A4, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $A8, $00
+  .db $00, $A7, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A5, $A9, $00
 ;; main level, with included attributes
 level_A1:
 
 ;; stored in metatiles, visually like below:
-;; total of 15 (NOT! 16) rows, and 16 columns
+;; total of 12 (NOT! 16, basically the 15 minus the GUI room) rows, and 16 columns
 ;; each is an index into the `metatiles` address to tell which metatile is located on the grid
-;; so this section is 15 * 16 = 240 bytes
+;; so this section is 12 * 16 = 192 bytes
   .db $00, $00, $08, $03, $06, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   .db $00, $00, $08, $03, $06, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   .db $00, $00, $08, $03, $06, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
@@ -925,9 +1310,6 @@ level_A1:
   .db $00, $00, $08, $0D, $04, $04, $04, $04, $04, $11, $00, $00, $00, $00, $00, $00
   .db $00, $00, $0B, $07, $07, $07, $07, $07, $07, $11, $00, $00, $00, $00, $00, $00
   .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $11, $00, $00, $00, $00, $00, $00
-  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
 
@@ -950,14 +1332,12 @@ level_A2:
   .db $00, $00, $00, $00, $11, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .db $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
 
 
 generic_attributes:
 
 ;;; attributes are 64 bytes that tell how the metatiles behave (color palette)
+; see here: https://wiki.nesdev.com/w/index.php/PPU_attribute_tables
   .db %00000000, %00000000, %00000000, %00000000, %00000000, %00000000, %00000000, %00000000
   .db %00000000, %00000000, %00000000, %00000000, %00000000, %00000000, %00000000, %00000000
   .db %00000000, %00000000, %00000000, %00000000, %00000000, %00000000, %00000000, %00000000
@@ -980,11 +1360,19 @@ palette:
   
   ;; background palettes
   ;              blue              red            green              N/A
-  .db $01,$11,$21,$31, $05,$15,$25,$35, $09,$19,$29,$39, $09,$19,$29,$39
+  .db $0F,$1C,$2B,$39,  $0F,$07,$26,$34,  $0F,$09,$28,$36,  $0F,$07,$26,$34
+
+  ;; good blue: $0F,$1C,$2B,$39
+  ;; good red: $0F,$1B,$2A,$38
+  ;; good : $0F,$09,$28,$36
+  ;; good : $0F,$07,$26,$34
 
   ;; sprite palettes
   ;           default             blue              red            green
-  .db $0F,$30,$26,$05, $0F,$0F,$0F,$0F, $0F,$0F,$0F,$0F, $0F,$0F,$0F,$0F
+  .db $0F,$15,$35,$15, $0F,$1B,$2A,$38, $0F,$1B,$2A,$38, $0F,$1B,$2A,$38
+
+  ;; greenish: $0F,$1B,$2A,$38
+  ;; pinkish: $05,$15,$25,$35
 
 
 
@@ -1056,7 +1444,6 @@ metatiles_defs:
 
   ; I'm not using the IRQ interrupt
   .dw 0          
-  
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
   
