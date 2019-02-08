@@ -31,12 +31,23 @@ CONTROLLER_2 = $4017
 
 PLAYER_SPRITE = oam+0
 
+NPC_SPRITESTART = PLAYER_SPRITE + 4*4
+
 OFFSET_Y = $00
 OFFSET_TILE = $01
 OFFSET_ATTR = $02
 OFFSET_X = $03
 
 ;;;; macros
+
+.macro SET_CSPRITE addr
+
+    LDA #>(addr)
+    STA ptr_csprite_hi
+    LDA #<(addr)
+    STA ptr_csprite_lo
+
+.endmacro
 
 ; load sprite Y into A
 .macro L_SPR_Y
@@ -158,6 +169,8 @@ bcd_100s: .res 1
 ; backed, leftmost 4 bits are 10s digit, and rightmost 4 bits are the 1s digit
 bcd_10s1s: .res 1
 
+NPC1_state: .res 1
+
 
 ;; this is the area sent to the PPU containing the sprites
 ; each sprite takes up 4 bytes:
@@ -238,12 +251,12 @@ RESET:
     JSR SetBackground
     JSR SetHUD
 
-    ; set up player
+    
+    LDA #100
+    STA player_health
 
-    LDA #>(PLAYER_SPRITE)
-    STA ptr_csprite_hi
-    LDA #<(PLAYER_SPRITE)
-    STA ptr_csprite_lo
+    ; set up player
+    SET_CSPRITE PLAYER_SPRITE
 
     LDA #$80
     S_SPR_Y
@@ -264,11 +277,31 @@ RESET:
     LDY #($01+4*3)
     STA (ptr_csprite_lo), Y
 
-    LDA #100
-    STA player_health
+    ; set NPC
+
+    SET_CSPRITE NPC_SPRITESTART
+
+    LDA #$60
+    S_SPR_Y
+
+    LDA #$60
+    S_SPR_X
+
+    LDA #$04
+    LDY #($01)
+    STA (ptr_csprite_lo), Y
+    LDA #$05
+    LDY #($01+4)
+    STA (ptr_csprite_lo), Y
+    LDA #$06
+    LDY #($01+4*2)
+    STA (ptr_csprite_lo), Y
+    LDA #$07
+    LDY #($01+4*3)
+    STA (ptr_csprite_lo), Y
+
 
     JSR PPUOn
-
 
 
 ; start main loop
@@ -281,9 +314,33 @@ RESET:
     
 ; update non-player-characters
 @MoveNPCs:
+    SET_CSPRITE NPC_SPRITESTART
+    JSR UpdateCspriteMetatile
+    
+    JSR RandomNumber
+    AND #%00000001
+    CMP #%00000000
+    BNE @NoStateChange
 
+    LDA NPC1_state
+    BEQ @P1
+    LDA #$00
+    STA NPC1_state
+    JMP @NoStateChange
+    @P1:
+        LDA #$01
+        STA NPC1_state
 
+    @NoStateChange:
+        LDA NPC1_state
 
+        BEQ @NoNPCMovement
+
+        JSR MoveSprite
+
+        @NoNPCMovement:
+
+            JSR UpdateSprite3Extra
 
 ; deal with player
 @MovePlayer:
@@ -294,10 +351,7 @@ RESET:
     STA game_flag
 
     ;; load current sprite to be player
-    LDA #>(PLAYER_SPRITE)
-    STA ptr_csprite_hi
-    LDA #<(PLAYER_SPRITE)
-    STA ptr_csprite_lo
+    SET_CSPRITE PLAYER_SPRITE
     JSR UpdateCspriteMetatile
 
     JSR SetPlayerOrient
@@ -350,6 +404,7 @@ RESET:
 
 NMI:
 ; called every frame
+; TODO: music here
     RTI
 
 IRQ:

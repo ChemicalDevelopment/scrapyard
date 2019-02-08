@@ -1,5 +1,20 @@
 ;; math utility functions
 
+
+;; random number into A
+;; basically just iterates rand_state = (rand_state * 5 + 3) % 256
+RandomNumber:
+    LDA rand_state
+    ASL A
+    ASL A
+    CLC
+    ADC rand_state
+    CLC
+    ADC #$03
+    STA rand_state
+    RTS
+
+
 ;; this calculates the BCD (binary coded decimal) of the accumulator, and stores it in bcd_100s and bcd_10s1s.
 CalcBCD:
     STA tmp1
