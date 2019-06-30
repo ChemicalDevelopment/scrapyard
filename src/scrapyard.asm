@@ -318,7 +318,7 @@ RESET:
     JSR UpdateCspriteMetatile
     
     JSR RandomNumber
-    AND #%00000001
+    AND #%00000111
     CMP #%00000000
     BNE @NoStateChange
 

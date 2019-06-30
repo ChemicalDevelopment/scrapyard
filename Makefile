@@ -14,7 +14,7 @@ main: $(SOURCES)
 	ld65 -o $(OUTPUT).nes -C rom.cfg objdir/scrapyard.o -m objdir/$(OUTPUT).map.txt -Ln objdir/$(OUTPUT).labels.txt --dbgfile objdir/$(OUTPUT).nes.dbg
 
 open: main
-	$(EMU) 
+	$(EMU)  $(OUTPUT).nes
 
 
 clean:

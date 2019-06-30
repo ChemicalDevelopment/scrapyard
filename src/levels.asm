@@ -11,41 +11,55 @@ default_hud:
 
 ;; storage for the definitions of metatiles
 metatiles_defs:
-; each metatile is 4 bytes. They are sequentially arranged, TOPLEFT, TOPRIGHT, BOTTOMLEFT, BOTTOMRIGHt in which background tile
+; each metatile is 4 bytes. They are sequentially arranged, TOPLEFT, TOPRIGHT, BOTTOMLEFT, BOTTOMRIGHT in which background tile
 
   ; $00 starts here
-
-  ; blank
-  .byte $00, $00, $00, $00
-
-  ; whole block
-  .byte $01, $01, $01, $01
-
-  ;; lattice patterns (starts at metatile $02)
-  .byte $02, $02, $02, $02 ; Solid
+  .byte $00, $00, $00, $00 ; blank
+  .byte $02, $02, $02, $02 ; solid
   .byte $0B, $0C, $0B, $0C ; Road middle (up/down)
   .byte $0D, $0D, $0E, $0E ; Road middle (left/right)
 
-  ; $05 starts here
-  .byte $03, $03, $02, $02 ; Barrier N
-  .byte $02, $04, $02, $04 ; Barrier E 
-  .byte $02, $02, $05, $05 ; Barrier S
-  .byte $06, $02, $06, $02 ; Barrier W
+  ; $04 starts here
+  .byte $03, $03, $02, $02 ; Road Side N
+  .byte $02, $04, $02, $04 ; Road Side E
+  .byte $02, $02, $05, $05 ; Road Side S
+  .byte $06, $02, $06, $02 ; Road Side W
 
-  ; $09 starts here
+  ; $08 starts here
   .byte $03, $08, $02, $04 ; Corner NE
   .byte $02, $04, $05, $0A ; Corner SE
   .byte $06, $02, $09, $05 ; Corner SW
   .byte $07, $03, $06, $02 ; Corner NW
 
-  ; $0D starts here
+  ; $0C starts here
   .byte $0B, $0F, $02, $0E ; RoadLinePipe NE
   .byte $0B, $0F, $02, $0E ; TODO
   .byte $0B, $0F, $02, $0E ; TODO
   .byte $0B, $0F, $02, $0E ; TODO
 
-  ; $11 starts here
-  .byte $10, $10, $10, $10
+  ; $10 starts here
+  .byte $10, $10, $10, $10 ; barrier #1 (smallest)
+  .byte $11, $11, $11, $11 ; barrier #2
+  .byte $12, $12, $12, $12 ; barrier #3
+  .byte $13, $02, $02, $13 ; barrier #4 (largest)
+
+  ; $14 starts here
+  .byte $20, $20, $20, $20 ; tile simple 2x2
+  .byte $07, $08, $09, $0A ; tile big 1x1
+  .byte $00, $00, $00, $00 ; TODO
+  .byte $00, $00, $00, $00 ; TODO
+
+  ; $18 starts here
+  .byte $22, $22, $02, $02 ; Sidewalk N
+  .byte $02, $23, $02, $23 ; Sidewalk E
+  .byte $02, $02, $24, $24 ; Sidewalk S
+  .byte $21, $02, $21, $02 ; Sidewalk W
+
+  ; $1C starts here
+  .byte $22, $25, $02, $23 ; Sidewalk Corner NE
+  .byte $22, $25, $02, $23 ; Sidewalk Corner SE
+  .byte $21, $02, $27, $24 ; Sidewalk Corner SW
+  .byte $22, $25, $02, $23 ; Sidewalk Corner NW
 
 
 ;; metadata about that sort of tile (does it block player movement, activate something, etc)
@@ -54,36 +68,38 @@ metatiles_attr:
 ; %ABCDEFGH 
 ; H: is considered a blocking obstacle if 1
 
-
-  .byte %00000000, %00000000, %00000000, %00000000    , %00000000
+  ; blocks $00-$10
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  .byte %00000000, %00000000, %00000000, %00000000
+  
+  ; blocks $10-$20
+  .byte %00000001, %00000001, %00000001, %00000001
   .byte %00000000, %00000000, %00000000, %00000000
   .byte %00000000, %00000000, %00000000, %00000000
   .byte %00000000, %00000000, %00000000, %00000000
 
-  ; blocks
-  .byte %00000001
-
-  .byte %00000000, %00000000, %00000000, %00000000
-
-
-level_A1:
 
 ;; stored in metatiles, visually like below:
 ;; total of 12 (NOT! 16, basically the 15 minus the GUI room) rows, and 16 columns
 ;; each is an index into the `metatiles` address to tell which metatile is located on the grid
 ;; so this section is 12 * 16 = 192 bytes
-  .byte $00, $00, $08, $03, $06, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $08, $03, $06, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $08, $03, $06, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $08, $03, $06, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $08, $03, $06, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $08, $03, $06, $00, $00, $00, $00, $11, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $08, $03, $02, $05, $05, $05, $05, $11, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $08, $0D, $04, $04, $04, $04, $04, $11, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $0B, $07, $07, $07, $07, $07, $07, $11, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $11, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
-  .byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+
+level_A1:
+
+  .byte $13, $19, $07, $02, $05, $1B, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .byte $13, $19, $07, $02, $05, $1B, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .byte $13, $19, $07, $02, $05, $1B, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .byte $13, $19, $07, $02, $05, $1B, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .byte $13, $19, $07, $02, $05, $1B, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+  .byte $13, $19, $07, $02, $05, $1E, $1A, $1A, $1A, $11, $00, $00, $00, $00, $00, $00
+  .byte $13, $19, $07, $02, $01, $04, $04, $04, $04, $11, $00, $00, $00, $00, $00, $00
+  .byte $13, $19, $07, $0C, $03, $03, $03, $03, $03, $11, $00, $00, $00, $00, $00, $00
+  .byte $13, $19, $0A, $06, $06, $06, $06, $06, $06, $11, $00, $00, $00, $00, $00, $00
+  .byte $13, $01, $18, $18, $18, $18, $18, $18, $18, $11, $00, $00, $00, $00, $00, $00
+  .byte $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13
+  .byte $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13, $13
 
 
 ;; main level, with included attributes
@@ -105,3 +121,6 @@ level_A2:
   .byte $00, $00, $00, $00, $11, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   .byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
   .byte $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00, $00
+
+
+

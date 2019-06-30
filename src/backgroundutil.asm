@@ -264,6 +264,7 @@ MoveBackground:
         RTS
     @MoveBackgroundDone:
         RTS
+
 ;; writes the BCD variables to the HUD at a specified spot
 WriteBCDToHUD:
     STA tmp1
@@ -281,13 +282,9 @@ WriteBCDToHUD:
     STA $2007
     
     ; write 10s digit
-    LDA bcd_10s1s
-    LSR A
-    LSR A
-    LSR A
-    LSR A
+    LDA bcd_100s
     CLC
-    ADC #$80
+    ADC #$80 ; $80 is the offset of the alphabet in the CHR file
     STA $2007
 
     ; write 1s digit
@@ -297,7 +294,17 @@ WriteBCDToHUD:
     ADC #$80
     STA $2007
 
-    ; reset scroll
+; write restof line
+    LDA #$00
+    STA $2007
+    STA $2007
+    STA $2007
+    STA $2007
+    STA $2007
+    STA $2007
+    STA $2007
+    STA $2007
+
     JSR ResetScroll
 
     RTS
